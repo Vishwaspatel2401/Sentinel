@@ -115,6 +115,11 @@ services:
     # The worker uses python -m so Python adds /app to sys.path automatically.
     # The sys.path.insert in investigation_worker.py is a no-op inside Docker
     # (it adds /app which is already there) but harmless.
+    stop_grace_period: 60s
+    # Docker default is 10s — too short for a 4-agent LLM investigation (10–30s).
+    # 60s gives the worker time to finish the current job before force-kill (SIGKILL).
+    # Flow: docker-compose down → SIGTERM sent → worker finishes job → exits cleanly.
+    # If 60s passes and the worker hasn't exited, Docker sends SIGKILL as a fallback.
 
 # ── Named volumes ──────────────────────────────────────────────────────────────
 # Named volumes persist data across `docker-compose down` (but not `down -v`).

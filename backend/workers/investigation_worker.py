@@ -5,13 +5,15 @@
 # WHY:  The FastAPI endpoint responds in <10ms (just saves to DB + enqueues).
 #       The actual investigation takes 10-30 seconds (4 LLM calls, tool calls).
 #       Keeping them separate means the API is always fast.
-# PATTERN: Producer/Consumer — FastAPI (producer) pushes to Redis queue,
-#          this worker (consumer) pulls and processes with BLPOP.
-# WEEK 2 CHANGE:
-#   Week 1: called InvestigationService — one LLM call, sequential pipeline
-#   Week 2: calls AgentOrchestrator    — 4 agents, ReAct loop, tool calling
-#   The worker itself barely changed — only the service it calls changed.
-#   This is the power of the Facade pattern: AgentOrchestrator hides complexity.
+# GRACEFUL SHUTDOWN:
+#   Docker sends SIGTERM when you run `docker-compose down`.
+#   Without handling it, the worker is force-killed mid-investigation —
+#   the incident stays as "investigating" forever, the user polls forever.
+#   With SIGTERM handling:
+#     1. Signal arrives → shutdown_event is set
+#     2. Current investigation finishes (can take up to 30s)
+#     3. Worker exits cleanly, Redis connection closed
+#   docker-compose.yml sets stop_grace_period: 60s to allow this.
 # FLOW:
 #   FastAPI POST /alerts → saves incident → pushes incident_id to Redis
 #   This worker         → pulls incident_id → runs 4 agents → saves result
@@ -27,6 +29,7 @@
 import asyncio                                            # async event loop
 import json                                               # deserialise Redis payload
 import logging                                            # structured logging
+import signal                                             # SIGTERM / SIGINT handling
 import sys                                               # path manipulation
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -90,7 +93,20 @@ async def main() -> None:
     # The worker is a separate process — it must configure logging independently.
     setup_logging(settings.log_level)
 
-    logger.info("Starting Sentinel investigation worker", extra={"mode": "agent", "week": 2})
+    logger.info("Starting Sentinel investigation worker", extra={"mode": "agent"})
+
+    # ── Graceful shutdown setup ────────────────────────────────────────────────
+    # asyncio.Event is a flag that can be set from a signal handler.
+    # We use loop.add_signal_handler() (not signal.signal()) because:
+    #   - signal.signal() handlers run in the main thread, which can block the
+    #     event loop at an arbitrary point mid-coroutine
+    #   - loop.add_signal_handler() schedules the callback safely on the event
+    #     loop so it runs between coroutine steps, never corrupting state
+    shutdown_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)  # docker-compose down
+    loop.add_signal_handler(signal.SIGINT,  shutdown_event.set)  # Ctrl+C locally
 
     # Create shared instances — once per worker lifetime, not per job.
     # LLMService: shared so the circuit breaker failure count persists across all jobs.
@@ -98,24 +114,37 @@ async def main() -> None:
     llm_svc = LLMService()
     rag_svc = RAGService()
 
-    redis = await aioredis.from_url(settings.redis_url)
+    redis_client = await aioredis.from_url(settings.redis_url)
     logger.info("Connected to Redis — listening for alerts", extra={"queue": QUEUE_KEY})
 
-    while True:
-        # BLPOP blocks until an item appears in the queue, then pops and returns it.
-        # timeout=5 means: if nothing arrives in 5s, return None and loop again.
-        # This lets the worker wake up periodically (useful for graceful shutdown).
-        result = await redis.blpop(QUEUE_KEY, timeout=5)
+    # ── Main loop ──────────────────────────────────────────────────────────────
+    # Runs until SIGTERM/SIGINT sets shutdown_event.
+    # BLPOP timeout=5 means the loop wakes up every 5 seconds even if the queue
+    # is empty — this is what lets us check shutdown_event and exit promptly
+    # instead of blocking forever waiting for a message that never comes.
+    while not shutdown_event.is_set():
+        result = await redis_client.blpop(QUEUE_KEY, timeout=5)
 
         if result is None:
-            continue    # timeout — queue was empty, wait again
+            continue    # timeout — queue was empty, check shutdown_event and loop
 
         _, raw = result                         # BLPOP returns (key, value) tuple
         payload = json.loads(raw)              # parse {"incident_id": "uuid-string"}
         incident_id = payload["incident_id"]
 
         logger.info("Received alert — starting agent pipeline", extra={"incident_id": incident_id})
+
+        # process_one() can take 10–30 seconds (4 LLM calls).
+        # If SIGTERM arrives during this call, shutdown_event is set but we
+        # let process_one() finish. The `while not shutdown_event.is_set()`
+        # check runs AFTER the job completes — not before or during.
+        # This guarantees no investigation is abandoned half-finished.
         await process_one(incident_id, llm_svc, rag_svc)
+
+    # ── Clean exit ─────────────────────────────────────────────────────────────
+    # We only reach here after shutdown_event is set AND the current job is done.
+    logger.info("Shutdown signal received — worker exiting cleanly")
+    await redis_client.aclose()
 
 
 if __name__ == "__main__":

@@ -14,8 +14,11 @@
 # =============================================================================
 
 from fastapi import FastAPI, Depends
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from pathlib import Path
 from core.logging_config import setup_logging        # structured JSON logging
 from config import settings                          # log_level from .env
 from api.routers import alerts                       # POST /api/v1/alerts
@@ -40,6 +43,13 @@ app = FastAPI(title="Sentinel", version="0.1.0")
 # Without this handler, a rate-limited request would return a 500 error instead.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Serve the frontend dashboard ──────────────────────────────────────────────
+# The frontend/ directory lives at the project root (one level above backend/).
+# StaticFiles serves index.html, CSS, JS without auth — it's just a UI.
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+if _FRONTEND_DIR.exists():
+    app.mount("/dashboard", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="frontend")
 
 # ── Register the health router (NO auth) ──────────────────────────────────────
 # /health must be public — load balancers and uptime monitors call it without keys.

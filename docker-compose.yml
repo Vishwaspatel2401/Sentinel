@@ -58,6 +58,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Migrations ───────────────────────────────────────────────────────────────
+  # Runs `alembic upgrade head` once and exits.
+  # Both `api` and `worker` depend on this completing successfully before they start.
+  # This guarantees the schema is always up to date before any code touches the DB.
+  # condition: service_completed_successfully = Docker waits for exit code 0.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sentinel:sentinel_dev@postgres/sentinel
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app    # picks up any new migration files without rebuilding
+    command: alembic upgrade head
+    restart: "no"         # run once and done — never restart on exit
+
   # ── API (FastAPI) ─────────────────────────────────────────────────────────────
   # The HTTP server — POST /alerts, GET /incidents/{id}, GET /health.
   # Built from the same Dockerfile as the worker (shared image, different CMD).
@@ -77,9 +96,11 @@ services:
       DATA_DIR:          /app/data   # overrides the local default in config.py
     depends_on:
       postgres:
-        condition: service_healthy   # wait for pg_isready before starting
+        condition: service_healthy
       redis:
-        condition: service_healthy   # wait for redis ping before starting
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully  # schema must be ready before API starts
     volumes:
       - ./data:/app/data             # RAG index files (runbooks.index, chunks.json, bm25.pkl)
       - ./backend:/app               # bind-mount source for hot-reload in dev
@@ -108,6 +129,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully  # schema must be ready before worker starts
     volumes:
       - ./data:/app/data
       - huggingface_cache:/root/.cache/huggingface  # share the cached model with the api

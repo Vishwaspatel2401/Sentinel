@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentinel — Incident Dashboard</title>
+  <style>
+    /* ── Reset & base ───────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 2rem;
+      border-bottom: 1px solid #1e2535;
+      background: #0f1117;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #60a5fa;
+      letter-spacing: -0.02em;
+    }
+
+    .logo-icon { font-size: 1.4rem; }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+    }
+
+    #api-key-input {
+      background: #1e2535;
+      border: 1px solid #2d3748;
+      color: #e2e8f0;
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      width: 220px;
+      outline: none;
+    }
+
+    #api-key-input:focus { border-color: #60a5fa; }
+
+    .refresh-badge {
+      font-size: 0.75rem;
+      color: #64748b;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      margin-right: 5px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Main layout ─────────────────────────────────────────────────────────── */
+    main {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      height: calc(100vh - 57px);
+    }
+
+    /* ── Incidents list (left panel) ─────────────────────────────────────────── */
+    #incidents-panel {
+      border-right: 1px solid #1e2535;
+      overflow-y: auto;
+      background: #0f1117;
+    }
+
+    .panel-header {
+      padding: 1rem 1.2rem 0.6rem;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+      border-bottom: 1px solid #1e2535;
+    }
+
+    .incident-row {
+      padding: 0.9rem 1.2rem;
+      border-bottom: 1px solid #1a2030;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+
+    .incident-row:hover { background: #1a2030; }
+    .incident-row.active { background: #1e2d4a; border-left: 3px solid #60a5fa; }
+
+    .incident-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.3rem;
+    }
+
+    .service-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+
+    .incident-title {
+      font-size: 0.78rem;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 260px;
+    }
+
+    .time-ago {
+      font-size: 0.7rem;
+      color: #475569;
+      white-space: nowrap;
+    }
+
+    /* ── Status badges ───────────────────────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 99px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-investigating { background: #1e3a5f; color: #60a5fa; }
+    .badge-resolved      { background: #14532d; color: #4ade80; }
+    .badge-failed        { background: #450a0a; color: #f87171; }
+
+    /* ── Severity pills ──────────────────────────────────────────────────────── */
+    .sev {
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.04em;
+    }
+
+    .sev-P1, .sev-critical { background: #7f1d1d; color: #fca5a5; }
+    .sev-P2, .sev-high      { background: #78350f; color: #fdba74; }
+    .sev-P3, .sev-medium    { background: #713f12; color: #fde68a; }
+    .sev-P4, .sev-low       { background: #1e3a5f; color: #93c5fd; }
+
+    /* ── Detail panel (right) ────────────────────────────────────────────────── */
+    #detail-panel {
+      padding: 2rem;
+      overflow-y: auto;
+      background: #0f1117;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #334155;
+      gap: 0.6rem;
+    }
+
+    .empty-state-icon { font-size: 3rem; }
+    .empty-state-text { font-size: 0.9rem; }
+
+    /* ── Detail sections ─────────────────────────────────────────────────────── */
+    .detail-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      gap: 1rem;
+    }
+
+    .detail-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1.4;
+    }
+
+    .detail-meta {
+      display: flex;
+      gap: 0.6rem;
+      margin-top: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .section {
+      background: #141b2d;
+      border: 1px solid #1e2d45;
+      border-radius: 10px;
+      padding: 1.2rem;
+      margin-bottom: 1rem;
+    }
+
+    .section-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #475569;
+      margin-bottom: 0.6rem;
+    }
+
+    .section-content {
+      font-size: 0.88rem;
+      color: #cbd5e1;
+      line-height: 1.6;
+    }
+
+    .confidence-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      margin-top: 0.4rem;
+    }
+
+    .confidence-bar {
+      flex: 1;
+      height: 6px;
+      background: #1e2535;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #2563eb, #60a5fa);
+      transition: width 0.4s ease;
+    }
+
+    .confidence-value {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #60a5fa;
+      min-width: 36px;
+    }
+
+    .evidence-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .evidence-list li {
+      font-size: 0.82rem;
+      color: #94a3b8;
+      padding-left: 1rem;
+      position: relative;
+      line-height: 1.5;
+    }
+
+    .evidence-list li::before {
+      content: "›";
+      position: absolute;
+      left: 0;
+      color: #475569;
+    }
+
+    .fix-block {
+      font-family: "Menlo", "Monaco", "Courier New", monospace;
+      font-size: 0.8rem;
+      color: #a5f3fc;
+      background: #0a1628;
+      border: 1px solid #1e3a5f;
+      border-radius: 6px;
+      padding: 0.8rem 1rem;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+
+    .escalate-banner {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: #450a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 8px;
+      padding: 0.8rem 1rem;
+      font-size: 0.85rem;
+      color: #fca5a5;
+      margin-bottom: 1rem;
+    }
+
+    .incident-id-chip {
+      font-family: monospace;
+      font-size: 0.72rem;
+      background: #1e2535;
+      color: #64748b;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    /* ── Spinner ─────────────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #1e3a5f;
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-row {
+      padding: 2rem;
+      text-align: center;
+      color: #334155;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <span class="logo-icon">🛡️</span>
+    Sentinel
+  </div>
+  <div class="header-right">
+    <input
+      id="api-key-input"
+      type="password"
+      placeholder="X-API-Key"
+      value="sentinel-dev-key"
+    />
+    <span class="refresh-badge">
+      <span class="dot"></span>
+      live
+    </span>
+  </div>
+</header>
+
+<main>
+  <!-- Left: incident list -->
+  <div id="incidents-panel">
+    <div class="panel-header">Recent Incidents</div>
+    <div id="incidents-list">
+      <div class="loading-row"><span class="spinner"></span></div>
+    </div>
+  </div>
+
+  <!-- Right: incident detail -->
+  <div id="detail-panel">
+    <div class="empty-state">
+      <div class="empty-state-icon">🔍</div>
+      <div class="empty-state-text">Select an incident to view the investigation</div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let selectedId = null;
+  let incidents  = [];
+  let pollTimer  = null;
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const apiKey  = () => document.getElementById("api-key-input").value.trim();
+  const headers = () => ({ "X-API-Key": apiKey(), "Content-Type": "application/json" });
+
+  function timeAgo(iso) {
+    if (!iso) return "";
+    const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+    if (diff < 60)   return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    return `${Math.floor(diff/3600)}h ago`;
+  }
+
+  function badgeHtml(status) {
+    const labels = { investigating: "investigating", resolved: "resolved", failed: "failed" };
+    return `<span class="badge badge-${status}">${
+      status === "investigating" ? '<span class="spinner"></span>' : ""
+    }${labels[status] || status}</span>`;
+  }
+
+  function sevHtml(sev) {
+    return `<span class="sev sev-${sev}">${sev}</span>`;
+  }
+
+  // ── Fetch incidents list ───────────────────────────────────────────────────
+  async function fetchList() {
+    try {
+      const res = await fetch("/api/v1/incidents", { headers: headers() });
+      if (!res.ok) return;
+      incidents = await res.json();
+      renderList();
+      // Re-fetch detail if selected incident might have updated
+      if (selectedId) {
+        const updated = incidents.find(i => i.incident_id === selectedId);
+        if (updated && updated.status !== "investigating") fetchDetail(selectedId);
+      }
+    } catch (e) { /* network error — silently retry */ }
+  }
+
+  // ── Render left panel ──────────────────────────────────────────────────────
+  function renderList() {
+    const container = document.getElementById("incidents-list");
+    if (!incidents.length) {
+      container.innerHTML = `<div class="loading-row">No incidents yet — post an alert to get started.</div>`;
+      return;
+    }
+
+    container.innerHTML = incidents.map(inc => `
+      <div class="incident-row ${inc.incident_id === selectedId ? "active" : ""}"
+           onclick="selectIncident('${inc.incident_id}')">
+        <div class="incident-row-top">
+          <span class="service-name">${inc.service_name}</span>
+          <span class="time-ago">${timeAgo(inc.created_at)}</span>
+        </div>
+        <div class="incident-title">${inc.title}</div>
+        <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+          ${sevHtml(inc.severity)}
+          ${badgeHtml(inc.status)}
+          ${inc.confidence != null
+            ? `<span style="font-size:0.7rem;color:#475569">${Math.round(inc.confidence*100)}% conf</span>`
+            : ""}
+        </div>
+      </div>
+    `).join("");
+  }
+
+  // ── Select and fetch detail ────────────────────────────────────────────────
+  async function selectIncident(id) {
+    selectedId = id;
+    renderList();   // highlight the selected row
+    document.getElementById("detail-panel").innerHTML =
+      `<div class="loading-row"><span class="spinner"></span>&nbsp; Loading investigation...</div>`;
+    await fetchDetail(id);
+  }
+
+  async function fetchDetail(id) {
+    try {
+      const res = await fetch(`/api/v1/incidents/${id}`, { headers: headers() });
+      if (!res.ok) { renderDetailError(); return; }
+      renderDetail(await res.json());
+    } catch (e) { renderDetailError(); }
+  }
+
+  function renderDetailError() {
+    document.getElementById("detail-panel").innerHTML =
+      `<div class="empty-state"><div class="empty-state-text">Failed to load — check your API key.</div></div>`;
+  }
+
+  // ── Render detail panel ────────────────────────────────────────────────────
+  function renderDetail(inc) {
+    const r = inc.resolution;
+    const panel = document.getElementById("detail-panel");
+
+    let html = `
+      <div class="detail-header">
+        <div>
+          <div class="detail-title">${inc.title}</div>
+          <div class="detail-meta">
+            ${sevHtml(inc.severity)}
+            ${badgeHtml(inc.status)}
+            <span class="incident-id-chip">${inc.incident_id.slice(0,8)}…</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Alert Details</div>
+        <div class="section-content">
+          <strong>Service:</strong> ${inc.service_name}<br>
+          <strong>Source:</strong> ${inc.source}<br>
+          <strong>Description:</strong> ${inc.description}
+        </div>
+      </div>
+    `;
+
+    if (!r) {
+      html += `
+        <div class="section">
+          <div class="section-label">Investigation</div>
+          <div class="section-content" style="color:#475569">
+            <span class="spinner"></span>&nbsp; Agent pipeline running — this takes 15–30 seconds…
+          </div>
+        </div>
+      `;
+    } else {
+      const conf = Math.round(r.confidence * 100);
+
+      if (inc.status === "failed") {
+        html += `<div class="escalate-banner">⚠️ Investigation failed after all retry attempts. Manual review required.</div>`;
+      }
+
+      html += `
+        <div class="section">
+          <div class="section-label">Root Cause</div>
+          <div class="section-content">${r.root_cause}</div>
+          <div class="confidence-bar-wrap">
+            <div class="confidence-bar">
+              <div class="confidence-fill" style="width:${conf}%"></div>
+            </div>
+            <span class="confidence-value">${conf}%</span>
+          </div>
+        </div>
+      `;
+
+      if (r.evidence && r.evidence.length) {
+        html += `
+          <div class="section">
+            <div class="section-label">Evidence</div>
+            <ul class="evidence-list">
+              ${r.evidence.map(e => `<li>${e}</li>`).join("")}
+            </ul>
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="section">
+          <div class="section-label">Suggested Fix</div>
+          <div class="fix-block">${r.suggested_fix}</div>
+        </div>
+      `;
+
+      if (r.escalation_reason) {
+        const isEscalated = conf < 50;
+        html += `
+          <div class="section">
+            <div class="section-label">Escalation</div>
+            <div class="section-content" style="color:${isEscalated ? '#f87171' : '#4ade80'}">
+              ${isEscalated ? "⚠️ Escalate to on-call" : "✓ No escalation needed"}<br>
+              <span style="color:#64748b;font-size:0.82rem">${r.escalation_reason}</span>
+            </div>
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="section">
+          <div class="section-label">Model</div>
+          <div class="section-content" style="color:#475569;font-size:0.8rem">${r.llm_model_used}</div>
+        </div>
+      `;
+    }
+
+    panel.innerHTML = html;
+
+    // If still investigating, keep polling the detail every 5s
+    if (inc.status === "investigating") {
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(() => { if (selectedId === inc.incident_id) fetchDetail(inc.incident_id); }, 5000);
+    }
+  }
+
+  // ── Auto-refresh list every 8 seconds ─────────────────────────────────────
+  fetchList();
+  setInterval(fetchList, 8000);
+</script>
+
+</body>
+</html>

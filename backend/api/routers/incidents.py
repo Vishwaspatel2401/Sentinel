@@ -36,6 +36,30 @@ router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 # Path parameter: incident_id — the UUID returned by POST /alerts.
 # FastAPI automatically parses the string from the URL into a uuid.UUID object.
 # If it's not a valid UUID, FastAPI returns a 422 before this function even runs.
+@router.get("")
+@limiter.limit("60/minute")
+async def list_incidents(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Return the 20 most recent incidents, newest first. Used by the dashboard."""
+    repo = IncidentRepository(db)
+    incidents = await repo.list_recent(limit=20)
+
+    return [
+        {
+            "incident_id":  str(inc.id),
+            "service_name": inc.service_name,
+            "severity":     inc.severity,
+            "title":        inc.title,
+            "status":       inc.status,
+            "created_at":   inc.created_at.isoformat() if inc.created_at else None,
+            "confidence":   inc.resolution.confidence if inc.resolution else None,
+        }
+        for inc in incidents
+    ]
+
+
 @router.get("/{incident_id}")
 @limiter.limit("60/minute")
 async def get_incident(

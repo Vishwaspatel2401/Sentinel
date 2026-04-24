@@ -73,6 +73,17 @@ class IncidentRepository:
         )
         return result.scalar_one_or_none()  # returns the object or None if not found — never raises
 
+    async def list_recent(self, limit: int = 20) -> list[Incident]:
+        # Fetch the most recent incidents, newest first, with resolutions pre-loaded.
+        # Used by the dashboard to show all active and resolved investigations.
+        result = await self.db.execute(
+            select(Incident)
+            .options(selectinload(Incident.resolution))
+            .order_by(Incident.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def update_status(self, id: uuid.UUID, status: str) -> None:
         # update() builds an UPDATE query — equivalent to: UPDATE incidents SET status=? WHERE id=?
         await self.db.execute(

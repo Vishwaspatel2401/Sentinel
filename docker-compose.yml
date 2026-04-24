@@ -1,0 +1,123 @@
+# =============================================================================
+# FILE: docker-compose.yml
+# WHAT: Defines and wires all 4 services that make up Sentinel.
+# SERVICES:
+#   postgres — stores incidents, resolutions, logs, deploys (persistent data)
+#   redis    — the alert queue between the API and the worker
+#   api      — FastAPI server (POST /alerts, GET /incidents/{id}, GET /health)
+#   worker   — pulls from Redis queue, runs the 4-agent pipeline, saves results
+# HOW TO USE:
+#   Start everything:  docker-compose up --build
+#   Stop everything:   docker-compose down
+#   Wipe DB:           docker-compose down -v   (deletes the postgres_data volume)
+#   View logs:         docker-compose logs -f api
+#   View worker logs:  docker-compose logs -f worker
+# ENVIRONMENT:
+#   Copy .env.example → .env and fill in ANTHROPIC_API_KEY before running.
+#   API_SECRET_KEY defaults to "sentinel-dev-key" — change it for production.
+# =============================================================================
+
+services:
+
+  # ── Postgres ─────────────────────────────────────────────────────────────────
+  # Stores all persistent data: incidents, resolutions, log entries, deploys.
+  # Uses a named volume (postgres_data) so data survives container restarts.
+  # alpine variant = smallest image, no shell extras we don't need.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       sentinel
+      POSTGRES_USER:     sentinel
+      POSTGRES_PASSWORD: sentinel_dev
+    ports:
+      - "5432:5432"      # expose to host so you can connect with psql or a DB client
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # data persists across restarts
+    healthcheck:
+      # pg_isready exits 0 when Postgres is accepting connections.
+      # The api and worker use depends_on with condition: service_healthy,
+      # so they won't start until this passes.
+      test: ["CMD-SHELL", "pg_isready -U sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  # The queue between the API (producer) and worker (consumer).
+  # maxmemory-policy allkeys-lru: if Redis fills up, evict the least recently used
+  # key. Prevents OOM. 128mb is generous for a queue of incident IDs.
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      # redis-cli ping returns PONG when Redis is ready.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── API (FastAPI) ─────────────────────────────────────────────────────────────
+  # The HTTP server — POST /alerts, GET /incidents/{id}, GET /health.
+  # Built from the same Dockerfile as the worker (shared image, different CMD).
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL:      postgresql+asyncpg://sentinel:sentinel_dev@postgres/sentinel
+      REDIS_URL:         redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}          # read from your .env file
+      LLM_MODEL:         ${LLM_MODEL:-claude-haiku-4-5-20251001}
+      API_SECRET_KEY:    ${API_SECRET_KEY:-sentinel-dev-key}
+      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
+      DATA_DIR:          /app/data   # overrides the local default in config.py
+    depends_on:
+      postgres:
+        condition: service_healthy   # wait for pg_isready before starting
+      redis:
+        condition: service_healthy   # wait for redis ping before starting
+    volumes:
+      - ./data:/app/data             # RAG index files (runbooks.index, chunks.json, bm25.pkl)
+      - ./backend:/app               # bind-mount source for hot-reload in dev
+      - huggingface_cache:/root/.cache/huggingface  # cache the embedding model across restarts
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # --reload: uvicorn watches for file changes and restarts automatically.
+    #           Remove --reload for a production deployment.
+
+  # ── Worker (Investigation Pipeline) ──────────────────────────────────────────
+  # The background process — pulls incident IDs from Redis, runs 4 agents,
+  # saves results to Postgres. Separate from the API so the API stays fast.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL:      postgresql+asyncpg://sentinel:sentinel_dev@postgres/sentinel
+      REDIS_URL:         redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL:         ${LLM_MODEL:-claude-haiku-4-5-20251001}
+      API_SECRET_KEY:    ${API_SECRET_KEY:-sentinel-dev-key}
+      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
+      DATA_DIR:          /app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - huggingface_cache:/root/.cache/huggingface  # share the cached model with the api
+    command: python -m workers.investigation_worker
+    # The worker uses python -m so Python adds /app to sys.path automatically.
+    # The sys.path.insert in investigation_worker.py is a no-op inside Docker
+    # (it adds /app which is already there) but harmless.
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+# Named volumes persist data across `docker-compose down` (but not `down -v`).
+volumes:
+  postgres_data:      # Postgres rows — incidents, resolutions, logs, deploys
+  huggingface_cache:  # sentence-transformers model (~90MB) — downloaded once, reused forever

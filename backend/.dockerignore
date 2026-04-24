@@ -1,0 +1,40 @@
+# =============================================================================
+# FILE: backend/.dockerignore
+# WHAT: Tells Docker which files to exclude from the build context.
+# WHY:  Docker sends the entire build context to the daemon before building.
+#       Without this file, it would send venv/ (~500MB of packages), __pycache__,
+#       test cache, etc. — making every build slow even before the first RUN step.
+#       .dockerignore cuts the context from ~600MB to ~1MB.
+# =============================================================================
+
+# Virtual environment — packages are installed fresh inside the image.
+# Including venv/ would send 500MB of packages that get ignored anyway.
+venv/
+.venv/
+
+# Python bytecode — regenerated automatically inside the container.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Test artefacts — not needed to run the app.
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local development files — never go into a production image.
+.env
+*.env.local
+
+# Git history — not needed inside the container.
+.git/
+.gitignore
+
+# Editor artefacts
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/

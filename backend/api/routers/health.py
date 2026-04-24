@@ -64,9 +64,13 @@ async def health_check(db: AsyncSession = Depends(get_db_session)):
     # the worker manages its own Redis connection separately.
     try:
         r = await aioredis.from_url(settings.redis_url)
-        await r.ping()
-        await r.aclose()
-        checks["redis"] = "ok"
+        try:
+            await r.ping()
+            checks["redis"] = "ok"
+        finally:
+            # aclose() must run whether ping() succeeded or raised.
+            # Without finally, a failed ping leaks the connection forever.
+            await r.aclose()
     except Exception as e:
         logger.error("Health check — Redis unreachable", extra={"error": str(e)})
         checks["redis"] = f"error: {str(e)[:80]}"

@@ -1,0 +1,92 @@
+# =============================================================================
+# FILE: .github/workflows/tests.yml
+# WHAT: Runs the full test suite on every push and pull request.
+# WHY:  Without this, you find out something is broken when it hits production.
+#       With this, you find out 60 seconds after you push.
+#       Every commit on every branch gets a green ✓ or red ✗ in GitHub.
+# HOW IT WORKS:
+#   GitHub spins up a fresh Ubuntu VM, installs Python + dependencies,
+#   sets fake env vars so config.py can load, then runs pytest.
+#   All 51 tests mock the DB and LLM — no real Postgres/Redis/Anthropic needed.
+# CACHING:
+#   pip packages are cached by the hash of requirements.txt.
+#   First run: ~8 min (downloads torch + all deps).
+#   Subsequent runs with no requirements.txt change: ~90 seconds.
+# =============================================================================
+
+name: Tests
+
+# Run on every push to any branch, and on every pull request targeting main.
+# This means: your own pushes get tested, and PRs get tested before merge.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run pytest suite
+    runs-on: ubuntu-latest
+
+    # ── Fake environment variables ──────────────────────────────────────────────
+    # config.py calls Settings() at import time. Settings has required fields
+    # (anthropic_api_key, database_url, redis_url) with no defaults.
+    # We must set them so the import doesn't crash — the values don't matter
+    # because every test mocks the services that would use them.
+    env:
+      ANTHROPIC_API_KEY: test-key-not-real      # never sent to Anthropic — mocked in tests
+      DATABASE_URL: postgresql+asyncpg://sentinel:sentinel@localhost/sentinel
+      REDIS_URL: redis://localhost:6379
+      API_SECRET_KEY: test-secret-key
+      LOG_LEVEL: WARNING    # suppress INFO logs during test runs — less noise
+      DATA_DIR: /tmp        # RAGService is mocked in all tests — path never accessed
+
+    steps:
+      # ── 1. Check out the code ─────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python 3.12 ─────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── 3. Cache pip packages ─────────────────────────────────────────────────
+      # Key = OS + hash of requirements.txt.
+      # If requirements.txt hasn't changed, the full package set is restored
+      # from cache in ~10 seconds instead of downloading for ~5 minutes.
+      # The restore-keys fallback uses any existing cache for this OS if the
+      # exact hash isn't found (e.g. after you add one new package).
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ── 4. Install CPU-only PyTorch ───────────────────────────────────────────
+      # Same pattern as the Dockerfile — install torch from PyTorch's own index
+      # to get the 200MB CPU wheel instead of the 2GB CUDA wheel from PyPI.
+      # This MUST happen before requirements.txt so pip sees torch as satisfied.
+      - name: Install CPU-only PyTorch
+        run: |
+          pip install torch \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --quiet
+
+      # ── 5. Install all other dependencies ────────────────────────────────────
+      # torch is already installed and satisfies >=2.2.0 — pip skips it.
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt --quiet
+
+      # ── 6. Run the test suite ─────────────────────────────────────────────────
+      # pytest reads pytest.ini at the project root:
+      #   testpaths = tests        ← where to look
+      #   asyncio_mode = auto      ← async tests work without @pytest.mark.asyncio
+      # -v: verbose — shows each test name as it runs, not just a summary.
+      # --tb=short: on failure, show a compact traceback, not the full wall of text.
+      - name: Run tests
+        run: pytest -v --tb=short

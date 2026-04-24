@@ -15,7 +15,6 @@
 
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from pathlib import Path
@@ -45,9 +44,10 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Serve the frontend dashboard ──────────────────────────────────────────────
-# The frontend/ directory lives at the project root (one level above backend/).
-# StaticFiles serves index.html, CSS, JS without auth — it's just a UI.
-_FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# FRONTEND_DIR is read from config so it works in both environments:
+#   Local:  Sentinel/frontend/   (default in config.py)
+#   Docker: /app/frontend        (set via FRONTEND_DIR env var in docker-compose)
+_FRONTEND_DIR = Path(settings.frontend_dir)
 if _FRONTEND_DIR.exists():
     app.mount("/dashboard", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="frontend")
 

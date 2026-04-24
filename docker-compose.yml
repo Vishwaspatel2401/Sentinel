@@ -93,7 +93,8 @@ services:
       LLM_MODEL:         ${LLM_MODEL:-claude-haiku-4-5-20251001}
       API_SECRET_KEY:    ${API_SECRET_KEY:-sentinel-dev-key}
       LOG_LEVEL:         ${LOG_LEVEL:-INFO}
-      DATA_DIR:          /app/data   # overrides the local default in config.py
+      DATA_DIR:          /app/data      # overrides the local default in config.py
+      FRONTEND_DIR:      /app/frontend  # overrides the local default in config.py
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,6 +104,7 @@ services:
         condition: service_completed_successfully  # schema must be ready before API starts
     volumes:
       - ./data:/app/data             # RAG index files (runbooks.index, chunks.json, bm25.pkl)
+      - ./frontend:/app/frontend     # dashboard HTML — served at /dashboard
       - ./backend:/app               # bind-mount source for hot-reload in dev
       - huggingface_cache:/root/.cache/huggingface  # cache the embedding model across restarts
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

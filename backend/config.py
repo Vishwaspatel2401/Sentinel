@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # Overridden to /app/data in docker-compose so the container finds the mounted volume.
     data_dir: str = _DEFAULT_DATA_DIR
 
+    # Frontend directory — where index.html lives.
+    # Default resolves to Sentinel/frontend/ locally.
+    # Overridden to /app/frontend in docker-compose.
+    frontend_dir: str = str(Path(__file__).resolve().parent.parent / "frontend")
+
 
 settings = Settings()
 

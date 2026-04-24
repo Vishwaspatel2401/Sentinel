@@ -14,12 +14,15 @@
 # =============================================================================
 
 from fastapi import FastAPI, Depends
-from core.logging_config import setup_logging   # structured JSON logging
-from config import settings                      # log_level from .env
-from api.routers import alerts                   # POST /api/v1/alerts
-from api.routers import incidents                # GET /api/v1/incidents/{id}
-from api.routers import health                   # GET /health (public)
-from api.dependencies.auth import verify_api_key # X-API-Key header validation
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from core.logging_config import setup_logging        # structured JSON logging
+from config import settings                          # log_level from .env
+from api.routers import alerts                       # POST /api/v1/alerts
+from api.routers import incidents                    # GET /api/v1/incidents/{id}
+from api.routers import health                       # GET /health (public)
+from api.dependencies.auth import verify_api_key     # X-API-Key header validation
+from api.dependencies.rate_limit import limiter      # shared rate limiter instance
 
 # ── Configure logging FIRST — before the app is created ───────────────────────
 # setup_logging() configures the root logger with JSON formatting.
@@ -30,6 +33,13 @@ setup_logging(settings.log_level)
 # ── Create the FastAPI app ─────────────────────────────────────────────────────
 # title and version appear in the auto-generated /docs page.
 app = FastAPI(title="Sentinel", version="0.1.0")
+
+# ── Attach the rate limiter ────────────────────────────────────────────────────
+# app.state.limiter is where slowapi looks for the limiter at request time.
+# _rate_limit_exceeded_handler converts RateLimitExceeded → HTTP 429 JSON response.
+# Without this handler, a rate-limited request would return a 500 error instead.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Register the health router (NO auth) ──────────────────────────────────────
 # /health must be public — load balancers and uptime monitors call it without keys.

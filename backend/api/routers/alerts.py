@@ -16,12 +16,13 @@
 
 import json                                        # for serialising the Redis payload
 import redis.asyncio as aioredis                  # async Redis client
-from fastapi import APIRouter, Depends           # APIRouter groups related endpoints; Depends injects dependencies
+from fastapi import APIRouter, Depends, Request  # Request needed for rate limiter key func
 from sqlalchemy.ext.asyncio import AsyncSession  # type hint for the DB session
 from db.database import get_db_session           # dependency that hands a fresh DB session per request
 from db.repositories.incident_repo import IncidentRepository  # all DB logic for incidents
 from schemas.alert import AlertCreate, AlertResponse           # request + response shapes
 from config import settings                      # redis_url from .env
+from api.dependencies.rate_limit import limiter  # shared rate limiter
 
 # The Redis list key the worker listens on — must match QUEUE_KEY in investigation_worker.py
 QUEUE_KEY = "sentinel:alert:queue"
@@ -43,7 +44,9 @@ router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
 # 202 means: "I received it and processing has started, but it's not finished yet."
 # Honest — the investigation runs in the background worker, not inside this request.
 @router.post("", response_model=AlertResponse, status_code=202)
+@limiter.limit("20/minute")
 async def create_alert(
+    request: Request,                            # required by slowapi to read the rate limit key
     alert: AlertCreate,                          # parsed + validated from the JSON request body
     db: AsyncSession = Depends(get_db_session)   # fresh DB session injected for this request
 ):

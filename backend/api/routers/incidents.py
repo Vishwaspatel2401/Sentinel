@@ -18,10 +18,11 @@
 # =============================================================================
 
 import uuid                                             # for parsing the UUID path parameter
-from fastapi import APIRouter, Depends, HTTPException   # HTTPException returns proper 404 JSON
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession         # type hint for the injected DB session
 from db.database import get_db_session                  # dependency that hands a fresh DB session per request
 from db.repositories.incident_repo import IncidentRepository  # all DB logic for incidents
+from api.dependencies.rate_limit import limiter          # shared rate limiter
 
 
 # Group all incident-related read endpoints under /api/v1/incidents.
@@ -36,7 +37,9 @@ router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 # FastAPI automatically parses the string from the URL into a uuid.UUID object.
 # If it's not a valid UUID, FastAPI returns a 422 before this function even runs.
 @router.get("/{incident_id}")
+@limiter.limit("60/minute")
 async def get_incident(
+    request: Request,                                # required by slowapi to read the rate limit key
     incident_id: uuid.UUID,                          # parsed from the URL path
     db: AsyncSession = Depends(get_db_session)       # fresh DB session injected for this request
 ):

@@ -86,7 +86,9 @@ jobs:
       # pytest reads pytest.ini at the project root:
       #   testpaths = tests        ← where to look
       #   asyncio_mode = auto      ← async tests work without @pytest.mark.asyncio
+      # -m "not eval": exclude LLM eval tests — they call the real Anthropic API
+      #   and need a real key. Run them locally with: pytest -m eval
       # -v: verbose — shows each test name as it runs, not just a summary.
       # --tb=short: on failure, show a compact traceback, not the full wall of text.
       - name: Run tests
-        run: pytest -v --tb=short
+        run: pytest -v --tb=short -m "not eval"

@@ -29,13 +29,20 @@ import os
 import pytest
 from unittest.mock import MagicMock
 
-# Skip ALL tests in this file if ANTHROPIC_API_KEY is not set.
-# This prevents CI pipelines without the key from failing on eval tests.
-# pytestmark applies the mark to every test function in this module.
-pytestmark = pytest.mark.skipif(
-    not os.getenv("ANTHROPIC_API_KEY"),
-    reason="ANTHROPIC_API_KEY not set — skipping eval tests that call real API"
-)
+# Mark every test in this file with the "eval" marker.
+# This does two things:
+#   1. CI runs `pytest -m "not eval"` — these tests are excluded automatically
+#   2. Locally you can run `pytest -m eval` to run ONLY these tests
+#
+# We also keep a skipif guard for when someone runs `pytest` locally without a
+# real key (e.g. a fresh clone before setting up .env).
+pytestmark = [
+    pytest.mark.eval,
+    pytest.mark.skipif(
+        not os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "").startswith("test-"),
+        reason="Real ANTHROPIC_API_KEY required — set it in .env to run eval tests"
+    ),
+]
 
 from services.llm_service import LLMService
 from agents.classifier_agent import ClassifierAgent

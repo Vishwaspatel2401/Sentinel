@@ -89,3 +89,10 @@ frontend/.nuxt/
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 pip-log.txt
+
+# Production secrets — never commit
+.env.production
+.env.*.local
+nginx/certs/
+*.pem
+*.key

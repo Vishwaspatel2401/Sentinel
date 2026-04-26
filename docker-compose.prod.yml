@@ -1,0 +1,157 @@
+# =============================================================================
+# FILE: docker-compose.prod.yml
+# WHAT: Production-grade docker-compose. Differences from dev:
+#   - No bind mounts for source code (no hot reload)
+#   - No --reload on uvicorn
+#   - Postgres + Redis ports NOT exposed to host (nginx is the only entry point)
+#   - Redis has persistence (appendonly yes) — queue survives restarts
+#   - 3 worker replicas — 3 simultaneous investigations
+#   - 2 uvicorn workers — handles concurrent API requests
+#   - All secrets come from .env.production, nothing hardcoded
+#   - Nginx reverse proxy with HTTPS on port 443
+#   - restart: always — everything comes back up after a crash or reboot
+# HOW TO USE:
+#   Start:  docker-compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#   Stop:   docker-compose -f docker-compose.prod.yml down
+#   Logs:   docker-compose -f docker-compose.prod.yml logs -f worker
+#   Scale:  docker-compose -f docker-compose.prod.yml up -d --scale worker=5
+# =============================================================================
+
+services:
+
+  # ── Postgres ─────────────────────────────────────────────────────────────
+  # No port exposed — only reachable inside the Docker network.
+  # Credentials come entirely from .env.production — nothing hardcoded here.
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  # appendonly yes = Redis writes every command to disk.
+  # Queue survives a Redis restart — no jobs lost.
+  # No port exposed — only reachable inside Docker network.
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfilename sentinel.aof
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Migrations ───────────────────────────────────────────────────────────
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: alembic upgrade head
+    restart: "no"
+
+  # ── API ───────────────────────────────────────────────────────────────────
+  # uvicorn with 2 workers (handles concurrent requests).
+  # No --reload. No source bind mount.
+  # Port 8000 NOT exposed to host — nginx proxies to it.
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      REDIS_URL:         redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL:         ${LLM_MODEL}
+      API_SECRET_KEY:    ${API_SECRET_KEY}
+      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
+      DATA_DIR:          /app/data
+      FRONTEND_DIR:      /app/frontend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+      - ./frontend:/app/frontend
+      - huggingface_cache:/root/.cache/huggingface
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+
+  # ── Worker ────────────────────────────────────────────────────────────────
+  # 3 replicas = 3 investigations run simultaneously.
+  # Each worker is independent — they all pull from the same Redis queue.
+  # stop_grace_period: 60s gives each worker time to finish its current job.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      REDIS_URL:         redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL:         ${LLM_MODEL}
+      API_SECRET_KEY:    ${API_SECRET_KEY}
+      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
+      DATA_DIR:          /app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+      - huggingface_cache:/root/.cache/huggingface
+    command: python -m workers.investigation_worker
+    stop_grace_period: 60s
+    deploy:
+      replicas: 3
+
+  # ── Nginx ─────────────────────────────────────────────────────────────────
+  # The ONLY service with ports exposed to the host.
+  # Port 80  → redirects to HTTPS
+  # Port 443 → proxies to api:8000 with TLS, security headers, rate limiting
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+
+# ── Named volumes ─────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  redis_data:       # Redis AOF persistence
+  huggingface_cache:

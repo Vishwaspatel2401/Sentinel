@@ -154,8 +154,49 @@ services:
     depends_on:
       - api
 
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  # Scrapes /metrics from the API every 15s and stores time-series data.
+  # Port 9090 exposed only to localhost — not public.
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    ports:
+      - "127.0.0.1:9090:9090"   # localhost only — not public
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"   # keep 15 days of metrics
+      - "--web.enable-lifecycle"               # allow hot-reload of config
+    depends_on:
+      - api
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  # Visualises Prometheus data. Dashboard auto-provisioned from JSON file.
+  # Port 3000 exposed only to localhost — not public.
+  # Default login: admin / admin (change on first login).
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"   # localhost only — not public
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
 # ── Named volumes ─────────────────────────────────────────────────────────
 volumes:
   postgres_data:
   redis_data:       # Redis AOF persistence
   huggingface_cache:
+  prometheus_data:  # Prometheus time-series DB
+  grafana_data:     # Grafana settings and dashboards

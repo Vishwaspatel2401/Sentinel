@@ -15,9 +15,11 @@
 
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from pathlib import Path
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from core.logging_config import setup_logging        # structured JSON logging
 from config import settings                          # log_level from .env
 from api.routers import alerts                       # POST /api/v1/alerts
@@ -61,3 +63,11 @@ app.include_router(health.router)
 # Any request missing a valid X-API-Key header gets a 401 before the route runs.
 app.include_router(alerts.router,    dependencies=[Depends(verify_api_key)])
 app.include_router(incidents.router, dependencies=[Depends(verify_api_key)])
+
+# ── Prometheus metrics (/metrics) ─────────────────────────────────────────────
+# Public endpoint — Prometheus scrapes this without auth.
+# Returns all registered metrics in Prometheus text format.
+# Only expose on internal network in production (nginx should block external access).
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

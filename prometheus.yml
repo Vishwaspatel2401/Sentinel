@@ -1,0 +1,14 @@
+global:
+  scrape_interval:     15s   # scrape every 15 seconds
+  evaluation_interval: 15s   # evaluate alerting rules every 15 seconds
+
+scrape_configs:
+
+  - job_name: 'sentinel-api'
+    static_configs:
+      - targets: ['api:8000']   # api container inside Docker network
+    metrics_path: '/metrics'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

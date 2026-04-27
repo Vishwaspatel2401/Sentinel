@@ -35,8 +35,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ↑ adds backend/ to Python path so "from services.x import X" works
 
+import time
 import redis.asyncio as aioredis                          # async Redis client
 from core.logging_config import setup_logging             # JSON log format
+from core.metrics import (                                # Prometheus metrics
+    INVESTIGATIONS_TOTAL,
+    INVESTIGATION_DURATION,
+    ACTIVE_INVESTIGATIONS,
+    QUEUE_DEPTH,
+)
 from db.database import AsyncSessionLocal                 # session factory
 from db.repositories.incident_repo import IncidentRepository  # fetch incident by ID
 from services.agent_orchestrator import AgentOrchestrator # the full 4-agent pipeline
@@ -82,15 +89,25 @@ async def process_one(
                 return
 
             try:
+                ACTIVE_INVESTIGATIONS.inc()
+                start = time.time()
+
                 orchestrator = AgentOrchestrator(db, llm_svc, rag_svc)
                 await orchestrator.run(incident)
+
+                duration = time.time() - start
+                INVESTIGATION_DURATION.observe(duration)
+                INVESTIGATIONS_TOTAL.labels(status="resolved").inc()
+                ACTIVE_INVESTIGATIONS.dec()
+
                 logger.info(
                     "Investigation complete",
-                    extra={"incident_id": incident_id, "attempt": attempt}
+                    extra={"incident_id": incident_id, "attempt": attempt, "duration_seconds": round(duration, 2)}
                 )
                 return   # success — exit the retry loop
 
             except Exception as e:
+                ACTIVE_INVESTIGATIONS.dec()
                 logger.warning(
                     "Investigation attempt failed",
                     extra={
@@ -103,9 +120,6 @@ async def process_one(
                 )
 
                 if attempt <= MAX_RETRIES:
-                    # More retries left — wait and try again.
-                    # We close the DB session (via async with exiting) before sleeping
-                    # so we're not holding a connection open during the wait.
                     wait = RETRY_BACKOFF[attempt - 1]
                     logger.info(
                         "Retrying investigation",
@@ -115,9 +129,7 @@ async def process_one(
                 else:
                     # All attempts exhausted — mark as failed in Postgres
                     # AND push to the dead letter queue so the job is never lost.
-                    # Dead queue lets an operator inspect failed jobs and requeue
-                    # them via POST /api/v1/incidents/{id}/requeue without
-                    # having to fire a brand-new alert.
+                    INVESTIGATIONS_TOTAL.labels(status="failed").inc()
                     logger.error(
                         "All retry attempts exhausted — moving to dead letter queue",
                         extra={"incident_id": incident_id, "attempts": attempt}
@@ -171,6 +183,9 @@ async def main() -> None:
         result = await redis_client.blpop(QUEUE_KEY, timeout=5)
 
         if result is None:
+            # Update queue depth gauges every 5s even when idle
+            QUEUE_DEPTH.labels(queue="alert").set(await redis_client.llen(QUEUE_KEY))
+            QUEUE_DEPTH.labels(queue="dead").set(await redis_client.llen(DEAD_KEY))
             continue    # timeout — queue was empty, check shutdown_event and loop
 
         _, raw = result                         # BLPOP returns (key, value) tuple

@@ -25,6 +25,7 @@ import logging                       # structured logging
 import time                          # for tracking when the circuit breaker should reset
 import anthropic                     # Anthropic's official Python SDK
 from config import settings          # api key + model name
+from core.metrics import LLM_CALLS_TOTAL, LLM_CALL_DURATION, CIRCUIT_BREAKER_OPEN
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class LLMService:
 
         try:
             # --- Call the Anthropic API ---
+            t0 = time.time()
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=1024,         # cap response length — prevents runaway costs
@@ -84,6 +86,9 @@ class LLMService:
                     {"role": "user", "content": prompt}
                 ]
             )
+            LLM_CALL_DURATION.observe(time.time() - t0)
+            LLM_CALLS_TOTAL.labels(status="success").inc()
+            CIRCUIT_BREAKER_OPEN.set(0)
 
             # Success — reset failure counter
             self.failure_count = 0
@@ -156,9 +161,11 @@ class LLMService:
             extra={"failure_count": self.failure_count, "max": self.MAX_FAILURES, "reason": reason}
         )
 
+        LLM_CALLS_TOTAL.labels(status="failure").inc()
         if self.failure_count >= self.MAX_FAILURES:
             self.circuit_open = True
             self.opened_at = time.time()
+            CIRCUIT_BREAKER_OPEN.set(1)
             logger.critical("Circuit OPENED", extra={"retry_in_seconds": self.RESET_TIMEOUT})
 
         # Run rule-based analysis on the evidence we already have

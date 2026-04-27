@@ -86,7 +86,12 @@ frontend/build/
 frontend/.next/
 frontend/.nuxt/
 
+# ── Backups ───────────────────────────────────────────────────────────────────
+# pg_dump output — large binary files, stored on the server, never in git
+backups/
+
 # ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
 *.log
 pip-log.txt
 

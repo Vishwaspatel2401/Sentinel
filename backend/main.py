@@ -13,13 +13,14 @@
 #   → api/dependencies/auth.py     — verify_api_key applied to protected routers
 # =============================================================================
 
+import os
 from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from pathlib import Path
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry, multiprocess
 from core.logging_config import setup_logging        # structured JSON logging
 import core.metrics  # noqa: F401 — registers all sentinel_ metrics in this process's registry
 from config import settings                          # log_level from .env
@@ -69,6 +70,17 @@ app.include_router(incidents.router, dependencies=[Depends(verify_api_key)])
 # Public endpoint — Prometheus scrapes this without auth.
 # Returns all registered metrics in Prometheus text format.
 # Only expose on internal network in production (nginx should block external access).
+#
+# Multiprocess mode: when PROMETHEUS_MULTIPROC_DIR is set (Docker production),
+# the API and worker run in separate containers with a shared volume at that path.
+# MultiProcessCollector reads all .db files written by every process (workers + api)
+# and merges them into a single response. Without this, only the API process's
+# own metrics would be visible — worker counters/histograms would never appear.
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+    # Single-process (local dev): use the default global registry
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

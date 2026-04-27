@@ -85,14 +85,15 @@ services:
       dockerfile: Dockerfile
     restart: always
     environment:
-      DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-      REDIS_URL:         redis://redis:6379
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      LLM_MODEL:         ${LLM_MODEL}
-      API_SECRET_KEY:    ${API_SECRET_KEY}
-      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
-      DATA_DIR:          /app/data
-      FRONTEND_DIR:      /app/frontend
+      DATABASE_URL:                postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      REDIS_URL:                   redis://redis:6379
+      ANTHROPIC_API_KEY:           ${ANTHROPIC_API_KEY}
+      LLM_MODEL:                   ${LLM_MODEL}
+      API_SECRET_KEY:              ${API_SECRET_KEY}
+      LOG_LEVEL:                   ${LOG_LEVEL:-INFO}
+      DATA_DIR:                    /app/data
+      FRONTEND_DIR:                /app/frontend
+      PROMETHEUS_MULTIPROC_DIR:    /tmp/prometheus_multiproc
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,6 +105,7 @@ services:
       - ./data:/app/data
       - ./frontend:/app/frontend
       - huggingface_cache:/root/.cache/huggingface
+      - prometheus_multiproc:/tmp/prometheus_multiproc   # shared with workers
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     # Single worker — API only validates/enqueues, no CPU work here.
     # Multiple workers conflict with prometheus_client's in-process registry.
@@ -112,19 +114,23 @@ services:
   # 3 replicas = 3 investigations run simultaneously.
   # Each worker is independent — they all pull from the same Redis queue.
   # stop_grace_period: 60s gives each worker time to finish its current job.
+  # PROMETHEUS_MULTIPROC_DIR: workers write metric .db files to this shared
+  # volume. The API reads all .db files when /metrics is called, so Prometheus
+  # sees the merged metrics from all worker processes.
   worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
     environment:
-      DATABASE_URL:      postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
-      REDIS_URL:         redis://redis:6379
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      LLM_MODEL:         ${LLM_MODEL}
-      API_SECRET_KEY:    ${API_SECRET_KEY}
-      LOG_LEVEL:         ${LOG_LEVEL:-INFO}
-      DATA_DIR:          /app/data
+      DATABASE_URL:                postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      REDIS_URL:                   redis://redis:6379
+      ANTHROPIC_API_KEY:           ${ANTHROPIC_API_KEY}
+      LLM_MODEL:                   ${LLM_MODEL}
+      API_SECRET_KEY:              ${API_SECRET_KEY}
+      LOG_LEVEL:                   ${LOG_LEVEL:-INFO}
+      DATA_DIR:                    /app/data
+      PROMETHEUS_MULTIPROC_DIR:    /tmp/prometheus_multiproc
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +141,7 @@ services:
     volumes:
       - ./data:/app/data
       - huggingface_cache:/root/.cache/huggingface
+      - prometheus_multiproc:/tmp/prometheus_multiproc   # shared with api
     command: python -m workers.investigation_worker
     stop_grace_period: 60s
     deploy:
@@ -198,7 +205,8 @@ services:
 # ── Named volumes ─────────────────────────────────────────────────────────
 volumes:
   postgres_data:
-  redis_data:       # Redis AOF persistence
+  redis_data:             # Redis AOF persistence
   huggingface_cache:
-  prometheus_data:  # Prometheus time-series DB
-  grafana_data:     # Grafana settings and dashboards
+  prometheus_data:        # Prometheus time-series DB
+  grafana_data:           # Grafana settings and dashboards
+  prometheus_multiproc:   # Shared between api + workers for multiprocess metrics

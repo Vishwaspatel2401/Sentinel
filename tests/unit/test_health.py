@@ -56,7 +56,10 @@ def make_redis_patch(fail: bool = False):
     if fail:
         mock_redis.ping = AsyncMock(side_effect=Exception("connection refused"))
     else:
-        mock_redis.ping = AsyncMock()
+        mock_redis.ping  = AsyncMock()
+        # llen is called with `await` in health.py to read queue depths.
+        # Must be AsyncMock — plain MagicMock is not awaitable.
+        mock_redis.llen  = AsyncMock(return_value=0)
     mock_redis.aclose = AsyncMock()
 
     # AsyncMock so `await aioredis.from_url(url)` resolves to mock_redis

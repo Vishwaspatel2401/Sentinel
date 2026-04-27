@@ -167,7 +167,7 @@ else
     CONTAINER_NAME=$(docker inspect --format '{{.Name}}' "$container_id" | tr -d '/')
     echo "  Rolling worker $i/$WORKER_COUNT ($CONTAINER_NAME)..."
     # Stop this one worker — Docker honours the 60s grace period
-    docker stop --time 60 "$container_id"
+    docker stop --timeout 60 "$container_id"
     i=$((i + 1))
   done <<< "$WORKER_IDS"
 

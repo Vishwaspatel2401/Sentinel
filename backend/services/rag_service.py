@@ -76,7 +76,8 @@ class RAGService:
 
         # Get top 10 by BM25 score
         top_bm25_indices = np.argsort(bm25_raw_scores)[::-1][:10]
-        max_bm25 = max(bm25_raw_scores) if max(bm25_raw_scores) > 0 else 1.0  # avoid divide by zero
+        _max_bm25 = max(bm25_raw_scores) if len(bm25_raw_scores) > 0 else 0
+        max_bm25 = _max_bm25 if _max_bm25 > 0 else 1.0  # avoid divide-by-zero; guard empty index
         bm25_scores: dict[int, float] = {
             int(i): bm25_raw_scores[i] / max_bm25                  # normalize to 0-1
             for i in top_bm25_indices

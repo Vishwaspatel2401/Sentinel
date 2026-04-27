@@ -28,10 +28,13 @@ from pathlib import Path                               # cross-platform file pat
 from rank_bm25 import BM25Okapi                        # keyword search algorithm
 
 # --- Paths and constants ---
-RUNBOOKS_DIR = Path("data/runbooks")       # where your .md runbook files live
-INDEX_PATH = Path("data/runbooks.index")   # where FAISS index will be saved
-CHUNKS_PATH = Path("data/chunks.json")     # where chunk text + metadata will be saved
-BM25_PATH = Path("data/bm25.pkl")          # where BM25 index will be saved
+# Use __file__-relative paths so the script works regardless of which directory
+# it is invoked from (project root, scripts/, or anywhere else).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RUNBOOKS_DIR = _PROJECT_ROOT / "data" / "runbooks"     # where your .md runbook files live
+INDEX_PATH   = _PROJECT_ROOT / "data" / "runbooks.index"  # where FAISS index will be saved
+CHUNKS_PATH  = _PROJECT_ROOT / "data" / "chunks.json"  # where chunk text + metadata will be saved
+BM25_PATH    = _PROJECT_ROOT / "data" / "bm25.pkl"     # where BM25 index will be saved
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # free, 80MB, runs on CPU
 CHUNK_SIZE = 512    # words per chunk — big enough for context, small enough to be specific
 OVERLAP = 128       # shared words between adjacent chunks — prevents sentences being cut in half

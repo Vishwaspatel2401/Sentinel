@@ -29,8 +29,6 @@ numpy>=1.26.0                  # FAISS returns numpy arrays; sentence-transforme
 torch>=2.2.0                   # sentence-transformers backend — pinned so pip picks CPU wheel, not CUDA
 
 # Utilities
-httpx>=0.27.0
-tenacity>=8.3.0
 python-json-logger>=2.0.0      # formats log records as JSON lines for Datadog/CloudWatch
 slowapi>=0.1.9                 # rate limiting for FastAPI — wraps the `limits` library
 prometheus-client>=0.20.0      # exposes /metrics endpoint for Prometheus scraping

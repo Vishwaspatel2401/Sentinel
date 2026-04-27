@@ -58,9 +58,15 @@ class LLMService:
         # Optional evidence passed in so the fallback can still produce a real analysis.
         # These are already gathered BEFORE the LLM call — if Claude fails, we use them.
         logs_summary: str = "",          # summarised log patterns e.g. "847x: connection refused"
-        deploys: list = [],              # list of Deploy ORM objects fetched by DeployService
-        runbook_chunks: list = [],       # list of relevant runbook strings from RAGService
+        deploys: list | None = None,     # list of Deploy ORM objects fetched by DeployService
+        runbook_chunks: list | None = None,  # list of relevant runbook strings from RAGService
     ) -> str:
+        # Mutable default arguments are shared across all calls in Python.
+        # Using None + local default is the safe pattern.
+        if deploys is None:
+            deploys = []
+        if runbook_chunks is None:
+            runbook_chunks = []
 
         # --- Check circuit breaker BEFORE calling Claude ---
         if self.circuit_open:

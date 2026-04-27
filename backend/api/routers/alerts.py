@@ -23,9 +23,7 @@ from db.repositories.incident_repo import IncidentRepository  # all DB logic for
 from schemas.alert import AlertCreate, AlertResponse           # request + response shapes
 from config import settings                      # redis_url from .env
 from api.dependencies.rate_limit import limiter  # shared rate limiter
-
-# The Redis list key the worker listens on — must match QUEUE_KEY in investigation_worker.py
-QUEUE_KEY = "sentinel:alert:queue"
+from core.constants import QUEUE_KEY             # shared Redis queue key name
 
 # APIRouter groups all alert-related endpoints together.
 # prefix means every route here starts with /api/v1/alerts.

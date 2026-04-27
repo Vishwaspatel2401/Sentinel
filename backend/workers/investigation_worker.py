@@ -30,12 +30,8 @@ import asyncio                                            # async event loop
 import json                                               # deserialise Redis payload
 import logging                                            # structured logging
 import signal                                             # SIGTERM / SIGINT handling
-import sys                                               # path manipulation
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# ↑ adds backend/ to Python path so "from services.x import X" works
-
 import time
+import uuid                                               # for converting string IDs from Redis payload
 import redis.asyncio as aioredis                          # async Redis client
 from core.logging_config import setup_logging             # JSON log format
 from core.metrics import (                                # Prometheus metrics
@@ -44,6 +40,7 @@ from core.metrics import (                                # Prometheus metrics
     ACTIVE_INVESTIGATIONS,
     QUEUE_DEPTH,
 )
+from core.constants import QUEUE_KEY, DEAD_KEY            # shared Redis queue key names
 from db.database import AsyncSessionLocal                 # session factory
 from db.repositories.incident_repo import IncidentRepository  # fetch incident by ID
 from services.agent_orchestrator import AgentOrchestrator # the full 4-agent pipeline
@@ -52,9 +49,6 @@ from services.rag_service import RAGService               # shared — model loa
 from config import settings                               # redis_url from .env
 
 logger = logging.getLogger(__name__)
-
-QUEUE_KEY  = "sentinel:alert:queue"   # must match the key in alerts.py
-DEAD_KEY   = "sentinel:alert:dead"    # dead letter queue — jobs that exhausted all retries
 MAX_RETRIES = 2                        # attempt the pipeline up to 3 times total (1 + 2 retries)
 RETRY_BACKOFF = [5, 15]               # seconds to wait before retry 1, retry 2
 
@@ -107,11 +101,13 @@ async def process_one(
                 return   # success — exit the retry loop
 
             except Exception as e:
+                duration = time.time() - start
+                INVESTIGATION_DURATION.observe(duration)   # record failed durations too — shows real tail latency
                 ACTIVE_INVESTIGATIONS.dec()
                 logger.warning(
                     "Investigation attempt failed",
                     extra={
-                        "incident_id": incident_id,
+                        "incident_id": str(incident_id),
                         "attempt": attempt,
                         "max_attempts": MAX_RETRIES + 1,
                         "error": str(e),
@@ -190,7 +186,7 @@ async def main() -> None:
 
         _, raw = result                         # BLPOP returns (key, value) tuple
         payload = json.loads(raw)              # parse {"incident_id": "uuid-string"}
-        incident_id = payload["incident_id"]
+        incident_id = uuid.UUID(payload["incident_id"])   # convert to UUID — repo methods expect uuid.UUID
 
         logger.info("Received alert — starting agent pipeline", extra={"incident_id": incident_id})
 

@@ -17,7 +17,7 @@
 
 from datetime import datetime, timedelta, timezone     # for calculating the time window
 from sqlalchemy.ext.asyncio import AsyncSession        # async DB session type
-from sqlalchemy import select, func                    # query builder + SQL functions
+from sqlalchemy import select                          # query builder
 from db.models import LogEntry                         # the ORM model for the log_entries table
 
 

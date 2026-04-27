@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text                    # text() wraps raw SQL safely
 from db.database import get_db_session
+from core.constants import QUEUE_KEY, DEAD_KEY   # shared Redis queue key names
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -36,10 +37,6 @@ logger = logging.getLogger(__name__)
 # No prefix — /health lives at the root, not under /api/v1/
 # Keeping it at the root is the universal convention — every tool expects /health
 router = APIRouter(tags=["health"])
-
-
-QUEUE_KEY = "sentinel:alert:queue"
-DEAD_KEY  = "sentinel:alert:dead"
 
 
 @router.get("/health")

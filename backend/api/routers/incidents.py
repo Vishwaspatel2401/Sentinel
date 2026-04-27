@@ -25,10 +25,8 @@ import redis.asyncio as aioredis
 from db.database import get_db_session                  # dependency that hands a fresh DB session per request
 from db.repositories.incident_repo import IncidentRepository  # all DB logic for incidents
 from api.dependencies.rate_limit import limiter          # shared rate limiter
+from core.constants import QUEUE_KEY, DEAD_KEY           # shared Redis queue key names
 from config import settings
-
-QUEUE_KEY = "sentinel:alert:queue"
-DEAD_KEY  = "sentinel:alert:dead"
 
 # Group all incident-related read endpoints under /api/v1/incidents.
 # tags=["incidents"] puts them in their own section in the /docs page.
@@ -150,9 +148,9 @@ async def requeue_incident(
             detail=f"Incident status is '{incident.status}' — only 'failed' incidents can be requeued"
         )
 
-    # Reset status so the dashboard shows it as investigating again
+    # Reset status so the dashboard shows it as investigating again.
+    # update_status() already commits internally — no second commit needed.
     await repo.update_status(str(incident_id), "investigating")
-    await db.commit()
 
     payload = json.dumps({"incident_id": str(incident_id)})
 

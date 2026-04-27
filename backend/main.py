@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from pathlib import Path
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from core.logging_config import setup_logging        # structured JSON logging
+import core.metrics  # noqa: F401 — registers all sentinel_ metrics in this process's registry
 from config import settings                          # log_level from .env
 from api.routers import alerts                       # POST /api/v1/alerts
 from api.routers import incidents                    # GET /api/v1/incidents/{id}

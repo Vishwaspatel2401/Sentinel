@@ -104,7 +104,9 @@ services:
       - ./data:/app/data
       - ./frontend:/app/frontend
       - huggingface_cache:/root/.cache/huggingface
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    # Single worker — API only validates/enqueues, no CPU work here.
+    # Multiple workers conflict with prometheus_client's in-process registry.
 
   # ── Worker ────────────────────────────────────────────────────────────────
   # 3 replicas = 3 investigations run simultaneously.

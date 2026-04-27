@@ -47,6 +47,7 @@ from config import settings                               # redis_url from .env
 logger = logging.getLogger(__name__)
 
 QUEUE_KEY  = "sentinel:alert:queue"   # must match the key in alerts.py
+DEAD_KEY   = "sentinel:alert:dead"    # dead letter queue — jobs that exhausted all retries
 MAX_RETRIES = 2                        # attempt the pipeline up to 3 times total (1 + 2 retries)
 RETRY_BACKOFF = [5, 15]               # seconds to wait before retry 1, retry 2
 
@@ -55,6 +56,7 @@ async def process_one(
     incident_id: str,
     llm_svc: LLMService,
     rag_svc: RAGService,
+    redis_client: aioredis.Redis,
 ) -> None:
     """
     Run the 4-agent investigation pipeline for one incident, with retries.
@@ -111,13 +113,23 @@ async def process_one(
                     )
                     await asyncio.sleep(wait)
                 else:
-                    # All attempts exhausted — mark as failed.
+                    # All attempts exhausted — mark as failed in Postgres
+                    # AND push to the dead letter queue so the job is never lost.
+                    # Dead queue lets an operator inspect failed jobs and requeue
+                    # them via POST /api/v1/incidents/{id}/requeue without
+                    # having to fire a brand-new alert.
                     logger.error(
-                        "All retry attempts exhausted — marking incident as failed",
+                        "All retry attempts exhausted — moving to dead letter queue",
                         extra={"incident_id": incident_id, "attempts": attempt}
                     )
                     await repo.update_status(incident_id, "failed")
                     await db.commit()
+                    payload = json.dumps({"incident_id": incident_id})
+                    await redis_client.rpush(DEAD_KEY, payload)
+                    logger.info(
+                        "Incident moved to dead letter queue",
+                        extra={"incident_id": incident_id, "dead_queue": DEAD_KEY}
+                    )
 
 
 async def main() -> None:
@@ -172,7 +184,7 @@ async def main() -> None:
         # let process_one() finish. The `while not shutdown_event.is_set()`
         # check runs AFTER the job completes — not before or during.
         # This guarantees no investigation is abandoned half-finished.
-        await process_one(incident_id, llm_svc, rag_svc)
+        await process_one(incident_id, llm_svc, rag_svc, redis_client)
 
     # ── Clean exit ─────────────────────────────────────────────────────────────
     # We only reach here after shutdown_event is set AND the current job is done.

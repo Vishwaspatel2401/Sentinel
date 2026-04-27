@@ -17,13 +17,18 @@
 #   → db/models.py Incident has a .resolution relationship (one-to-one)
 # =============================================================================
 
+import json
 import uuid                                             # for parsing the UUID path parameter
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession         # type hint for the injected DB session
+import redis.asyncio as aioredis
 from db.database import get_db_session                  # dependency that hands a fresh DB session per request
 from db.repositories.incident_repo import IncidentRepository  # all DB logic for incidents
 from api.dependencies.rate_limit import limiter          # shared rate limiter
+from config import settings
 
+QUEUE_KEY = "sentinel:alert:queue"
+DEAD_KEY  = "sentinel:alert:dead"
 
 # Group all incident-related read endpoints under /api/v1/incidents.
 # tags=["incidents"] puts them in their own section in the /docs page.
@@ -108,4 +113,60 @@ async def get_incident(
         "created_at":    incident.created_at.isoformat() if incident.created_at else None,
         "updated_at":    incident.updated_at.isoformat() if incident.updated_at else None,
         "resolution":    resolution_data,           # None while investigating, dict when done
+    }
+
+
+@router.post("/{incident_id}/requeue")
+@limiter.limit("10/minute")
+async def requeue_incident(
+    request: Request,
+    incident_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    Move a failed incident from the dead letter queue back to the main alert queue.
+
+    Use this when:
+    - Anthropic had a temporary outage and you want to retry investigations
+    - A transient DB error caused a job to fail and you want to retry it
+    - You've fixed an underlying issue and want to re-investigate
+
+    Flow:
+    1. Verify the incident exists and is actually "failed"
+    2. Reset its status to "investigating" in Postgres
+    3. Remove it from the dead letter queue
+    4. Push it back onto the main alert queue
+    5. A worker picks it up and runs the pipeline again
+    """
+    repo = IncidentRepository(db)
+    incident = await repo.get_by_id(incident_id)
+
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if incident.status != "failed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Incident status is '{incident.status}' — only 'failed' incidents can be requeued"
+        )
+
+    # Reset status so the dashboard shows it as investigating again
+    await repo.update_status(str(incident_id), "investigating")
+    await db.commit()
+
+    payload = json.dumps({"incident_id": str(incident_id)})
+
+    r = await aioredis.from_url(settings.redis_url)
+    try:
+        # Remove from dead letter queue (LREM removes all matching entries)
+        await r.lrem(DEAD_KEY, 0, payload)
+        # Push to the front of the main queue (LPUSH = highest priority)
+        await r.lpush(QUEUE_KEY, payload)
+    finally:
+        await r.aclose()
+
+    return {
+        "requeued":    True,
+        "incident_id": str(incident_id),
+        "message":     "Incident reset to 'investigating' and pushed back onto the alert queue",
     }

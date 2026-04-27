@@ -38,58 +38,57 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 
+QUEUE_KEY = "sentinel:alert:queue"
+DEAD_KEY  = "sentinel:alert:dead"
+
+
 @router.get("/health")
 async def health_check(db: AsyncSession = Depends(get_db_session)):
     """
     Check connectivity to Postgres and Redis.
-    Returns 200 if both are reachable, 503 if either is down.
+    Also reports queue depths so you can spot backlogs and dead jobs at a glance.
+    Returns 200 if all checks pass, 503 if any are down.
     """
     checks = {}
+    queue  = {}
 
     # ── Check Postgres ─────────────────────────────────────────────────────────
-    # SELECT 1 is the lightest possible query — no table scan, no data returned.
-    # If it succeeds, we have a working DB connection. If it raises, DB is down.
     try:
         await db.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as e:
-        # Truncate the error — we don't want internal connection details leaked
-        # in the response body (security), but we do want them in the logs.
         logger.error("Health check — database unreachable", extra={"error": str(e)})
         checks["database"] = f"error: {str(e)[:80]}"
 
-    # ── Check Redis ────────────────────────────────────────────────────────────
-    # PING is the Redis equivalent of SELECT 1 — lightest possible check.
-    # We open and close the connection here (not reusing a pool) because
-    # the worker manages its own Redis connection separately.
+    # ── Check Redis + collect queue depths ─────────────────────────────────────
+    # Queue depth tells you instantly if:
+    #   - alert_queue > 0  → investigations are backlogged (workers may be slow/down)
+    #   - dead_queue   > 0 → jobs failed all retries and need manual attention
     try:
         r = await aioredis.from_url(settings.redis_url)
         try:
             await r.ping()
             checks["redis"] = "ok"
+            # LLEN is O(1) — just reads the list length, no scanning
+            queue["alert_queue_depth"] = await r.llen(QUEUE_KEY)
+            queue["dead_queue_depth"]  = await r.llen(DEAD_KEY)
         finally:
-            # aclose() must run whether ping() succeeded or raised.
-            # Without finally, a failed ping leaks the connection forever.
             await r.aclose()
     except Exception as e:
         logger.error("Health check — Redis unreachable", extra={"error": str(e)})
         checks["redis"] = f"error: {str(e)[:80]}"
 
     # ── Determine overall status ───────────────────────────────────────────────
-    # "ok" only if ALL checks passed. Any single failure = "degraded".
     all_ok = all(v == "ok" for v in checks.values())
     overall = "ok" if all_ok else "degraded"
     http_status = 200 if all_ok else 503
 
-    # Log the result — useful for spotting flapping health checks in production
     if all_ok:
-        logger.info("Health check passed", extra={"checks": checks})
+        logger.info("Health check passed", extra={"checks": checks, "queue": queue})
     else:
         logger.warning("Health check degraded", extra={"checks": checks})
 
-    # JSONResponse lets us set the status code dynamically (200 or 503).
-    # A plain `return {}` always returns 200 — can't do that here.
     return JSONResponse(
         status_code=http_status,
-        content={"status": overall, "checks": checks},
+        content={"status": overall, "checks": checks, "queue": queue},
     )
